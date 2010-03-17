@@ -59,7 +59,7 @@ static void reset_parser_vars(void)
 
 %token <str> CONNECT CLUSTER RUN ON ALL ANY SELECT
 %token <str> IDENT NUMBER FNCALL SPLIT STRING
-%token <str> SQLIDENT SQLPART
+%token <str> SQLIDENT SQLPART NEWSPLIT
 
 %union
 {
@@ -70,7 +70,9 @@ static void reset_parser_vars(void)
 
 body: | body stmt ;
 
-stmt: cluster_stmt | split_stmt | run_stmt | select_stmt | connect_stmt ;
+stmt: cluster_stmt | split_stmt | run_stmt | select_stmt | connect_stmt | newsplit_stmt;
+
+newsplit_stmt: NEWSPLIT ';' { xfunc->new_split = 1; }
 
 connect_stmt: CONNECT connect_spec ';'	{
 					if (got_connect)
@@ -82,7 +84,7 @@ connect_stmt: CONNECT connect_spec ';'	{
 connect_spec: connect_func sql_token_list | connect_name | connect_direct 
 			;
 
-connect_direct:	IDENT	{	connect_sql = plproxy_query_start(xfunc, false);
+connect_direct:	IDENT	{	connect_sql = plproxy_query_start(xfunc, false, false);
 						cur_sql = connect_sql;
 						plproxy_query_add_const(cur_sql, "select ");
 						if (!plproxy_query_add_ident(cur_sql, $1))
@@ -93,7 +95,7 @@ connect_direct:	IDENT	{	connect_sql = plproxy_query_start(xfunc, false);
 connect_name: STRING	{ xfunc->connect_str = plproxy_func_strdup(xfunc, $1); }
 			;
 
-connect_func: FNCALL	{ connect_sql = plproxy_query_start(xfunc, false);
+connect_func: FNCALL	{ connect_sql = plproxy_query_start(xfunc, false, false);
 	 				  cur_sql = connect_sql;
 	 				  plproxy_query_add_const(cur_sql, "select * from ");
 	 				  plproxy_query_add_const(cur_sql, $1); }
@@ -108,7 +110,7 @@ cluster_stmt: CLUSTER cluster_spec ';' {
 cluster_spec: cluster_name | cluster_func sql_token_list
 			;
 
-cluster_func: FNCALL	{ cluster_sql = plproxy_query_start(xfunc, false);
+cluster_func: FNCALL	{ cluster_sql = plproxy_query_start(xfunc, false, false);
 						  cur_sql = cluster_sql;
 						  plproxy_query_add_const(cur_sql, "select ");
 						  plproxy_query_add_const(cur_sql, $1); }
@@ -149,7 +151,7 @@ run_spec: hash_func sql_token_list	{ xfunc->run_type = R_HASH; }
 		| hash_direct				{ xfunc->run_type = R_HASH; }
 		;
 
-hash_direct: IDENT	{	hash_sql = plproxy_query_start(xfunc, false);
+hash_direct: IDENT	{	hash_sql = plproxy_query_start(xfunc, false, true);
 						cur_sql = hash_sql;
 						plproxy_query_add_const(cur_sql, "select ");
 						if (!plproxy_query_add_ident(cur_sql, $1))
@@ -157,7 +159,7 @@ hash_direct: IDENT	{	hash_sql = plproxy_query_start(xfunc, false);
 					}
 		 ;
 
-hash_func: FNCALL	{ hash_sql = plproxy_query_start(xfunc, false);
+hash_func: FNCALL	{ hash_sql = plproxy_query_start(xfunc, false, true);
 	 				  cur_sql = hash_sql;
 	 				  plproxy_query_add_const(cur_sql, "select * from ");
 	 				  plproxy_query_add_const(cur_sql, $1); }
@@ -167,7 +169,7 @@ select_stmt: sql_start sql_token_list ';' ;
 
 sql_start: SELECT		{ if (select_sql)
 							yyerror("Only one SELECT statement allowed");
-						  select_sql = plproxy_query_start(xfunc, true);
+						  select_sql = plproxy_query_start(xfunc, true, false);
 						  cur_sql = select_sql;
 						  plproxy_query_add_const(cur_sql, $1); }
 		 ;
@@ -212,6 +214,7 @@ void plproxy_run_parser(ProxyFunction *func, const char *body, int len)
 
 	/* By default expect RUN ON ANY; */
 	xfunc->run_type = R_ANY;
+	xfunc->new_split = ALWAYS_NEW_SPLIT;
 
 	/* reinitialize scanner */
 	plproxy_yylex_startup();
@@ -235,8 +238,16 @@ void plproxy_run_parser(ProxyFunction *func, const char *body, int len)
 	plproxy_yylex_destroy();
 
 	/* copy hash data if needed */
-	if (xfunc->run_type == R_HASH)
-		xfunc->hash_sql = plproxy_query_finish(hash_sql);
+	if (xfunc->run_type == R_HASH) {
+		if (xfunc->split_args && xfunc->new_split) {
+			xfunc->hash_sql = plproxy_split_query(xfunc, hash_sql);
+		} else {
+			xfunc->hash_sql = plproxy_query_finish(hash_sql);
+			xfunc->new_split = 0;
+		}
+	} else {
+		xfunc->new_split = 0;
+	}
 
 	/* store sql */
 	if (select_sql)

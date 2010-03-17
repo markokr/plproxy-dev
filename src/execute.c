@@ -794,6 +794,121 @@ tag_run_on_partitions(ProxyFunction *func, FunctionCallInfo fcinfo, int tag,
 	}
 }
 
+static int get_int(ProxyFunction *func, TupleDesc desc, HeapTuple row, int col, Oid oid)
+{
+	bool isnull;
+	Datum val = SPI_getbinval(row, desc, col, &isnull);
+	if (isnull)
+		plproxy_error(func, "expected not-NULL value");
+	if (oid == INT4OID)
+		return DatumGetInt32(val);
+	else if (oid == INT8OID)
+		return DatumGetInt64(val);
+	else if (oid == INT2OID)
+		return DatumGetInt16(val);
+	plproxy_error(func, "expected int arg");
+	return 0;
+}
+
+/*
+ * Add all values on row to per-connection arrays
+ */
+static void split_value(ProxyFunction *func, DatumArray *arrays_to_split[], ProxyConnection *conn, int row)
+{
+	int col;
+
+	if (!conn->bstate)
+		conn->bstate = palloc0(func->arg_count * sizeof(*conn->bstate));
+
+	/* Add this set of elements to the partition specific arrays */
+	for (col = 0; col < func->arg_count; col++)
+	{
+		if (!IS_SPLIT_ARG(func, col))
+			continue;
+
+		conn->bstate[col] = accumArrayResult(conn->bstate[col],
+											 arrays_to_split[col]->values[row],
+											 arrays_to_split[col]->nulls[row],
+											 arrays_to_split[col]->type->type_oid,
+											 CurrentMemoryContext);
+	}
+}
+
+/*
+ * Calculate all hashes with single query
+ */
+static void new_split_args(ProxyFunction *func, FunctionCallInfo fcinfo,
+						   int split_array_count,
+						   int split_array_len,
+						   DatumArray *arrays_to_split[])
+{
+	int			i;
+	TupleDesc	desc;
+	Oid			oid1, oid2;
+	ProxyCluster *cluster = func->cur_cluster;
+
+	/* execute cached plan */
+	plproxy_query_exec(func, fcinfo, func->hash_sql, NULL, 0);
+
+	/* get header */
+	desc = SPI_tuptable->tupdesc;
+	oid1 = SPI_gettypeid(desc, 1);
+	oid2 = SPI_gettypeid(desc, 2);
+
+	/* split arrays */
+	for (i = 0; i < SPI_processed; i++)
+	{
+		HeapTuple	row = SPI_tuptable->vals[i];
+		uint32		idx = get_int(func, desc, row, 1, oid1);
+		uint32		hash = get_int(func, desc, row, 2, oid2);
+		ProxyConnection *conn;
+
+		hash &= cluster->part_mask;
+		conn = cluster->part_map[hash];
+		if (conn->run_tag == idx)
+			continue;
+		conn->run_tag = idx;
+
+		split_value(func, arrays_to_split, conn, idx - 1);
+	}
+}
+
+/*
+ * Loop over arrays, handle each row separately.
+ */
+static void old_split_args(ProxyFunction *func, FunctionCallInfo fcinfo,
+						   int split_array_count,
+						   int split_array_len,
+						   DatumArray *arrays_to_split[])
+{
+	int					row;
+	ProxyCluster	   *cluster = func->cur_cluster;
+
+	/* Need to split, evaluate the RUN ON condition for each of the elements. */
+	for (row = 0; row < split_array_len; row++)
+	{
+		int		part;
+		int		my_tag = row+1;
+
+		/*
+		 * Tag the run-on partitions with a tag that allows us us to identify
+		 * which partitions need the set of elements from this row.
+		 */
+		tag_run_on_partitions(func, fcinfo, my_tag, arrays_to_split, row);
+
+		/* Add the array elements to the partitions tagged in previous step */
+		for (part = 0; part < cluster->conn_count; part++)
+		{
+			ProxyConnection	   *conn = &cluster->conn_list[part];
+
+			if (conn->run_tag != my_tag)
+				continue;
+
+			split_value(func, arrays_to_split, conn, row);
+		}
+	}
+}
+
 /*
  * Tag the partitions to be run on, if split is requested prepare the 
  * per-partition split array parameters.
@@ -805,7 +920,7 @@ tag_run_on_partitions(ProxyFunction *func, FunctionCallInfo fcinfo, int tag,
 static void
 prepare_and_tag_partitions(ProxyFunction *func, FunctionCallInfo fcinfo)
 {
-	int					i, row, col;
+	int					i, col;
 	int					split_array_len = -1;
 	int					split_array_count = 0;
 	ProxyCluster	   *cluster = func->cur_cluster;
@@ -854,43 +969,10 @@ prepare_and_tag_partitions(ProxyFunction *func, FunctionCallInfo fcinfo)
 		return;
 	}
 
-	/* Need to split, evaluate the RUN ON condition for each of the elements. */
-	for (row = 0; row < split_array_len; row++)
-	{
-		int		part;
-		int		my_tag = row+1;
-
-		/*
-		 * Tag the run-on partitions with a tag that allows us us to identify
-		 * which partitions need the set of elements from this row.
-		 */
-		tag_run_on_partitions(func, fcinfo, my_tag, arrays_to_split, row);
-
-		/* Add the array elements to the partitions tagged in previous step */
-		for (part = 0; part < cluster->conn_count; part++)
-		{
-			ProxyConnection	   *conn = &cluster->conn_list[part];
-
-			if (conn->run_tag != my_tag)
-				continue;
-
-			if (!conn->bstate)
-				conn->bstate = palloc0(func->arg_count * sizeof(*conn->bstate));
-
-			/* Add this set of elements to the partition specific arrays */
-			for (col = 0; col < func->arg_count; col++)
-			{
-				if (!IS_SPLIT_ARG(func, col))
-					continue;
-
-				conn->bstate[col] = accumArrayResult(conn->bstate[col],
-													 arrays_to_split[col]->values[row],
-													 arrays_to_split[col]->nulls[row],
-													 arrays_to_split[col]->type->type_oid,
-													 CurrentMemoryContext);
-			}
-		}
-	}
+	if (func->new_split)
+		new_split_args(func, fcinfo, split_array_count, split_array_len, arrays_to_split);
+	else
+		old_split_args(func, fcinfo, split_array_count, split_array_len, arrays_to_split);
 
 	/*
 	 * Finally, copy the accumulated arrays to the actual connections

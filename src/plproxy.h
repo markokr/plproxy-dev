@@ -62,6 +62,8 @@
 #error PL/Proxy requires 8.2+
 #endif
 
+#define ALWAYS_NEW_SPLIT 0
+
 /*
  * backwards compat with 8.2
  */
@@ -287,6 +289,8 @@ typedef struct ProxyFunction
 
 	bool	   *split_args;		/* Map of arguments to split */
 
+	bool		new_split;
+
 	/* if the function returns untyped RECORD that needs AS clause */
 	bool		dynamic_record;
 
@@ -375,10 +379,11 @@ void		plproxy_cluster_maint(struct timeval * now);
 Datum		plproxy_result(ProxyFunction *func, FunctionCallInfo fcinfo);
 
 /* query.c */
-QueryBuffer *plproxy_query_start(ProxyFunction *func, bool add_types);
+QueryBuffer *plproxy_query_start(ProxyFunction *func, bool add_types, bool track_refs);
 bool		plproxy_query_add_const(QueryBuffer *q, const char *data);
 bool		plproxy_query_add_ident(QueryBuffer *q, const char *ident);
 ProxyQuery *plproxy_query_finish(QueryBuffer *q);
+ProxyQuery *plproxy_split_query(ProxyFunction *func, QueryBuffer *q);
 ProxyQuery *plproxy_standard_query(ProxyFunction *func, bool add_types);
 void		plproxy_query_prepare(ProxyFunction *func, FunctionCallInfo fcinfo, ProxyQuery *q, bool split_support);
 void		plproxy_query_exec(ProxyFunction *func, FunctionCallInfo fcinfo, ProxyQuery *q,

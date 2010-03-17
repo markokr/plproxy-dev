@@ -23,6 +23,11 @@
 
 #include "plproxy.h"
 
+struct ArgRef {
+	int end;
+	int sql_idx;
+};
+
 /*
  * Temporary info structure for generation.
  *
@@ -35,13 +40,16 @@ struct QueryBuffer
 	int			arg_count;
 	int		   *arg_lookup;
 	bool		add_types;
+	bool		track_refs;
+	int			ref_count;
+	struct ArgRef refs[FUNC_MAX_ARGS];
 };
 
 /*
  * Prepare temporary structure for query generation.
  */
 QueryBuffer *
-plproxy_query_start(ProxyFunction *func, bool add_types)
+plproxy_query_start(ProxyFunction *func, bool add_types, bool track_refs)
 {
 	QueryBuffer *q = palloc(sizeof(*q));
 
@@ -49,6 +57,8 @@ plproxy_query_start(ProxyFunction *func, bool add_types)
 	q->sql = makeStringInfo();
 	q->arg_count = 0;
 	q->add_types = add_types;
+	q->track_refs = track_refs;
+	q->ref_count = 0;
 	q->arg_lookup = palloc(sizeof(int) * func->arg_count);
 	return q;
 }
@@ -89,6 +99,7 @@ plproxy_query_add_ident(QueryBuffer *q, const char *ident)
 	int			i,
 				fn_idx = -1,
 				sql_idx = -1;
+	struct ArgRef *ref = NULL;
 
 	fn_idx = plproxy_get_parameter_index(q->func, ident);
 
@@ -108,6 +119,13 @@ plproxy_query_add_ident(QueryBuffer *q, const char *ident)
 			q->arg_lookup[sql_idx] = fn_idx;
 		}
 		add_ref(q->sql, sql_idx, q->func, fn_idx, q->add_types);
+		if (q->track_refs) {
+			if (q->ref_count >= FUNC_MAX_ARGS)
+				elog(ERROR, "too many args to hash func");
+			ref = &q->refs[q->ref_count++];
+			ref->end = q->sql->len;
+			ref->sql_idx = sql_idx;
+		}
 	}
 	else
 	{
@@ -233,6 +251,70 @@ plproxy_standard_query(ProxyFunction *func, bool add_types)
 }
 
 /*
+ * Hack to calculate split hashes with one sql.
+ */
+ProxyQuery *
+plproxy_split_query(ProxyFunction *func, QueryBuffer *q)
+{
+	char *s;
+	struct ArgRef *ref;
+	int i, pos, fn_idx, first_split = -1;
+	StringInfoData buf[1];
+
+	if (!q->track_refs)
+		elog(ERROR, "split hack needs refs");
+
+	s = "select * from ";
+	if (strncmp(q->sql->data, s, strlen(s)) == 0)
+		pos = strlen(s);
+	else
+		pos = strlen("select ");
+
+	initStringInfo(buf);
+	appendStringInfoString(buf, "select i, ");
+	for (i = 0; i < q->ref_count; i++) {
+		ref = &q->refs[i];
+		appendBinaryStringInfo(buf, q->sql->data + pos, ref->end - pos);
+		pos = ref->end;
+		fn_idx = q->arg_lookup[ref->sql_idx];
+		if (func->split_args[fn_idx]) {
+			appendStringInfoString(buf, "[i]");
+			if (first_split < 0)
+				first_split = ref->sql_idx;
+		}
+	}
+
+	/* if no arrays go to hash func, add it */
+	if (first_split < 0) {
+		fn_idx = -1;
+		for (i = 0; i < func->arg_count; i++) {
+			if (func->split_args[i]) {
+				fn_idx = i;
+				break;
+			}
+		}
+		if (fn_idx < 0)
+			elog(ERROR, "some problem");
+		first_split = q->arg_count++;
+		q->arg_lookup[first_split] = fn_idx;
+	}
+
+#if PG_VERSION_NUM >= 80400
+	appendStringInfo(buf, "%s from generate_subscripts($%d, 1) i",
+					 q->sql->data + pos, first_split + 1);
+#else
+	/* 8.[23] do not have generate_subscripts() */
+	appendStringInfo(buf, "%s from generate_series(array_lower($%d, 1), array_upper($%d, 1)) i",
+					 q->sql->data + pos, first_split + 1, first_split + 1);
+#endif
+
+	pfree(q->sql->data);
+	*q->sql = *buf;
+
+	return plproxy_query_finish(q);
+}
+
+/*
  * Prepare ProxyQuery for local execution
  */
 void
@@ -241,6 +323,9 @@ plproxy_query_prepare(ProxyFunction *func, FunctionCallInfo fcinfo, ProxyQuery *
 	int			i;
 	Oid			types[FUNC_MAX_ARGS];
 	void	   *plan;
+
+	if (func->new_split)
+		split_support = false;
 
 	/* create sql statement in sql */
 	for (i = 0; i < q->arg_count; i++)
