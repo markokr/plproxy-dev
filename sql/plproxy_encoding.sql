@@ -29,7 +29,6 @@ create language plpgsql;
 \set ECHO none
 \i plproxy.sql
 \set ECHO all
-create schema plproxy;
 create or replace function plproxy.get_cluster_version(cluster_name text)
 returns integer as $$ begin return 1; end; $$ language plpgsql; 
 create or replace function plproxy.get_cluster_config(cluster_name text, out key text, out val text)
@@ -101,7 +100,6 @@ create language plpgsql;
 \i plproxy.sql
 \set ECHO all
 set client_encoding = 'utf8';
-create schema plproxy;
 create or replace function plproxy.get_cluster_version(cluster_name text)
 returns integer as $$ begin return 1; end; $$ language plpgsql; 
 create or replace function plproxy.get_cluster_config(cluster_name text, out key text, out val text)

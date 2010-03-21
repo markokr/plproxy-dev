@@ -3,7 +3,7 @@
 PLPROXY_VERSION = 2.1-cvs
 
 # libpq config
-PG_CONFIG = pg_config
+PG_CONFIG = /opt/apps/pgsql90/bin/pg_config
 PQINC = $(shell $(PG_CONFIG) --includedir)
 PQLIB = $(shell $(PG_CONFIG) --libdir)
 
@@ -14,7 +14,8 @@ SQLMED = $(shell test $(PGVER) "<" "8.4" && echo "false" || echo "true")
 # module setup
 MODULE_big = plproxy
 SRCS = src/cluster.c src/execute.c src/function.c src/main.c \
-       src/query.c src/result.c src/type.c src/poll_compat.c
+       src/query.c src/result.c src/type.c src/poll_compat.c \
+       src/unnest.c
 OBJS = src/scanner.o src/parser.tab.o $(SRCS:.c=.o)
 DATA_built = plproxy.sql
 EXTRA_CLEAN = src/scanner.[ch] src/parser.tab.[ch] plproxy.sql.in
@@ -34,6 +35,7 @@ DIST_FILES = Makefile src/plproxy.h src/rowstamp.h src/scanner.l src/parser.y \
 # regression testing setup
 REGRESS = plproxy_init plproxy_test plproxy_select plproxy_many \
 	  plproxy_errors plproxy_clustermap plproxy_dynamic_record \
+	  unnest \
 	  plproxy_encoding plproxy_split
 
 # SQL files

@@ -1,0 +1,16 @@
+select * from plproxy.unnest(array[1,2,3], array[4,5,6]) as (a int4, b int4);
+ a | b 
+---+---
+ 1 | 4
+ 2 | 5
+ 3 | 6
+(3 rows)
+
+select * from plproxy.enumerate(array[1,2,3], array[4,5,6]) as (nr int4, a int4, b int4);
+ nr | a | b 
+----+---+---
+  1 | 1 | 4
+  2 | 2 | 5
+  3 | 3 | 6
+(3 rows)
+

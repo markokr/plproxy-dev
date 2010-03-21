@@ -62,7 +62,7 @@
 #error PL/Proxy requires 8.2+
 #endif
 
-#define ALWAYS_NEW_SPLIT 0
+#define ALWAYS_NEW_SPLIT 1
 
 /*
  * backwards compat with 8.2

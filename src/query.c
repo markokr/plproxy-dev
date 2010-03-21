@@ -24,6 +24,7 @@
 #include "plproxy.h"
 
 struct ArgRef {
+	int start;
 	int end;
 	int sql_idx;
 };
@@ -89,6 +90,21 @@ add_ref(StringInfo buf, int sql_idx, ProxyFunction *func, int fn_idx, bool add_t
 	appendStringInfoString(buf, tmp);
 }
 
+static int get_sql_ref(QueryBuffer *q, int fn_idx)
+{
+	int i;
+	/* find already existing reference */
+	for (i = 0; i < q->arg_count; i++)
+	{
+		if (q->arg_lookup[i] == fn_idx)
+			return i;
+	}
+	/* new reference */
+	i = q->arg_count++;
+	q->arg_lookup[i] = fn_idx;
+	return i;
+}
+
 /*
  * Add a SQL identifier to the query that may possibly be
  * a parameter reference.
@@ -96,36 +112,28 @@ add_ref(StringInfo buf, int sql_idx, ProxyFunction *func, int fn_idx, bool add_t
 bool
 plproxy_query_add_ident(QueryBuffer *q, const char *ident)
 {
-	int			i,
-				fn_idx = -1,
-				sql_idx = -1;
+	int fn_idx = -1, sql_idx = -1;
 	struct ArgRef *ref = NULL;
 
 	fn_idx = plproxy_get_parameter_index(q->func, ident);
 
 	if (fn_idx >= 0)
 	{
-		for (i = 0; i < q->arg_count; i++)
-		{
-			if (q->arg_lookup[i] == fn_idx)
-			{
-				sql_idx = i;
-				break;
-			}
-		}
-		if (sql_idx < 0)
-		{
-			sql_idx = q->arg_count++;
-			q->arg_lookup[sql_idx] = fn_idx;
-		}
-		add_ref(q->sql, sql_idx, q->func, fn_idx, q->add_types);
+		sql_idx = get_sql_ref(q, fn_idx);
+
+		/* remeber position, if requested */
 		if (q->track_refs) {
 			if (q->ref_count >= FUNC_MAX_ARGS)
 				elog(ERROR, "too many args to hash func");
 			ref = &q->refs[q->ref_count++];
-			ref->end = q->sql->len;
+			ref->start = q->sql->len;
 			ref->sql_idx = sql_idx;
 		}
+
+		add_ref(q->sql, sql_idx, q->func, fn_idx, q->add_types);
+
+		if (q->track_refs)
+			ref->end = q->sql->len;
 	}
 	else
 	{
@@ -252,62 +260,83 @@ plproxy_standard_query(ProxyFunction *func, bool add_types)
 
 /*
  * Hack to calculate split hashes with one sql.
+ *
+ * select nr, myhash(a1), a1, a2 from plproxy.enumerate($1, $2) as (nr int4, a1 text, a2 text);
  */
 ProxyQuery *
 plproxy_split_query(ProxyFunction *func, QueryBuffer *q)
 {
-	char *s;
+	char *pfx;
 	struct ArgRef *ref;
-	int i, pos, fn_idx, first_split = -1;
+	int i, pos, fn_idx, sql_idx;
 	StringInfoData buf[1];
 
 	if (!q->track_refs)
 		elog(ERROR, "split hack needs refs");
 
-	s = "select * from ";
-	if (strncmp(q->sql->data, s, strlen(s)) == 0)
-		pos = strlen(s);
+	/* skip old prefix */
+	pfx = "select * from ";
+	if (strncmp(q->sql->data, pfx, strlen(pfx)) == 0)
+		pos = strlen(pfx);
 	else
 		pos = strlen("select ");
 
 	initStringInfo(buf);
-	appendStringInfoString(buf, "select i, ");
+	appendStringInfoString(buf, "select nr, ");
+
+	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
+
+	/* convert hash calculation */
 	for (i = 0; i < q->ref_count; i++) {
 		ref = &q->refs[i];
-		appendBinaryStringInfo(buf, q->sql->data + pos, ref->end - pos);
-		pos = ref->end;
 		fn_idx = q->arg_lookup[ref->sql_idx];
-		if (func->split_args[fn_idx]) {
-			appendStringInfoString(buf, "[i]");
-			if (first_split < 0)
-				first_split = ref->sql_idx;
+		if (!func->split_args[fn_idx]) {
+			appendBinaryStringInfo(buf, q->sql->data + pos, ref->end - pos);
+		} else {
+			appendBinaryStringInfo(buf, q->sql->data + pos, ref->start - pos);
+			appendStringInfo(buf, "a%d", ref->sql_idx + 1);
 		}
+		pos = ref->end;
 	}
+	appendStringInfo(buf, "%s as hash", q->sql->data + pos);
+	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
 
-	/* if no arrays go to hash func, add it */
-	if (first_split < 0) {
-		fn_idx = -1;
-		for (i = 0; i < func->arg_count; i++) {
-			if (func->split_args[i]) {
-				fn_idx = i;
-				break;
-			}
-		}
-		if (fn_idx < 0)
-			elog(ERROR, "some problem");
-		first_split = q->arg_count++;
-		q->arg_lookup[first_split] = fn_idx;
+	/* load data from all arrays */
+	for (fn_idx = 0; fn_idx < func->arg_count; fn_idx++) {
+		if (!func->split_args[fn_idx])
+			continue;
+		sql_idx = get_sql_ref(q, fn_idx);
+		appendStringInfo(buf, ", a%d", sql_idx + 1);
 	}
+	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
 
-#if PG_VERSION_NUM >= 80400
-	appendStringInfo(buf, "%s from generate_subscripts($%d, 1) i",
-					 q->sql->data + pos, first_split + 1);
-#else
-	/* 8.[23] do not have generate_subscripts() */
-	appendStringInfo(buf, "%s from generate_series(array_lower($%d, 1), array_upper($%d, 1)) i",
-					 q->sql->data + pos, first_split + 1, first_split + 1);
-#endif
+	/* call enumerate function on all arrays() */
+	appendStringInfoString(buf, " from plproxy.enumerate");
+	pfx = "(";
+	for (fn_idx = 0; fn_idx < func->arg_count; fn_idx++) {
+		if (!func->split_args[fn_idx])
+			continue;
+		sql_idx = get_sql_ref(q, fn_idx);
+		appendStringInfo(buf, "%s$%d", pfx, sql_idx + 1);
+		pfx = ", ";
+	}
+	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
 
+	/* describe enumerate output */
+	appendStringInfoString(buf, ") as (nr int4");
+	for (fn_idx = 0; fn_idx < func->arg_count; fn_idx++) {
+		ProxyType *typ;
+		if (!func->split_args[fn_idx])
+			continue;
+		sql_idx = get_sql_ref(q, fn_idx);
+		typ = plproxy_find_type_info(func, func->arg_types[fn_idx]->elem_type, false);
+		appendStringInfo(buf, ", a%d %s", sql_idx + 1, typ->name);
+		plproxy_free_type(typ);
+	}
+	appendStringInfoString(buf, ")");
+	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
+
+	/* replace old query */
 	pfree(q->sql->data);
 	*q->sql = *buf;
 

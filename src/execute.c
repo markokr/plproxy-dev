@@ -834,13 +834,33 @@ static void split_value(ProxyFunction *func, DatumArray *arrays_to_split[], Prox
 	}
 }
 
+static void split_value_new(ProxyFunction *func, ProxyConnection *conn, TupleDesc desc, HeapTuple row)
+{
+	int acol, rcol;
+	bool isnull;
+	Datum val;
+
+	if (!conn->bstate)
+		conn->bstate = palloc0(func->arg_count * sizeof(*conn->bstate));
+
+	/* Add this set of elements to the partition specific arrays */
+	for (acol = 0, rcol = 3; acol < func->arg_count; acol++)
+	{
+		if (!IS_SPLIT_ARG(func, acol))
+			continue;
+
+		val = SPI_getbinval(row, desc, rcol, &isnull);
+		conn->bstate[acol] = accumArrayResult(conn->bstate[acol], val, isnull,
+											  SPI_gettypeid(desc, rcol),
+											  CurrentMemoryContext);
+		rcol++;
+	}
+}
+
 /*
  * Calculate all hashes with single query
  */
-static void new_split_args(ProxyFunction *func, FunctionCallInfo fcinfo,
-						   int split_array_count,
-						   int split_array_len,
-						   DatumArray *arrays_to_split[])
+static void new_split_args(ProxyFunction *func, FunctionCallInfo fcinfo)
 {
 	int			i;
 	TupleDesc	desc;
@@ -869,7 +889,7 @@ static void new_split_args(ProxyFunction *func, FunctionCallInfo fcinfo,
 			continue;
 		conn->run_tag = idx;
 
-		split_value(func, arrays_to_split, conn, idx - 1);
+		split_value_new(func, conn, desc, row);
 	}
 }
 
@@ -941,6 +961,12 @@ prepare_and_tag_partitions(ProxyFunction *func, FunctionCallInfo fcinfo)
 			continue;
 		}
 
+		if (func->new_split) {
+			arrays_to_split[i] = NULL;
+			++split_array_count;
+			continue;
+		}
+
 		if (PG_ARGISNULL(i))
 			v = NULL;
 		else
@@ -970,7 +996,7 @@ prepare_and_tag_partitions(ProxyFunction *func, FunctionCallInfo fcinfo)
 	}
 
 	if (func->new_split)
-		new_split_args(func, fcinfo, split_array_count, split_array_len, arrays_to_split);
+		new_split_args(func, fcinfo);
 	else
 		old_split_args(func, fcinfo, split_array_count, split_array_len, arrays_to_split);
 
