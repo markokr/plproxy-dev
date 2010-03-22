@@ -269,6 +269,7 @@ plproxy_split_query(ProxyFunction *func, QueryBuffer *q)
 	char *pfx;
 	struct ArgRef *ref;
 	int i, pos, fn_idx, sql_idx;
+	bool gotarray = false;
 	StringInfoData buf[1];
 
 	if (!q->track_refs)
@@ -284,8 +285,6 @@ plproxy_split_query(ProxyFunction *func, QueryBuffer *q)
 	initStringInfo(buf);
 	appendStringInfoString(buf, "select nr, ");
 
-	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
-
 	/* convert hash calculation */
 	for (i = 0; i < q->ref_count; i++) {
 		ref = &q->refs[i];
@@ -295,46 +294,42 @@ plproxy_split_query(ProxyFunction *func, QueryBuffer *q)
 		} else {
 			appendBinaryStringInfo(buf, q->sql->data + pos, ref->start - pos);
 			appendStringInfo(buf, "a%d", ref->sql_idx + 1);
+			gotarray = true;
 		}
 		pos = ref->end;
 	}
 	appendStringInfo(buf, "%s as hash", q->sql->data + pos);
-	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
-
-	/* load data from all arrays */
-	for (fn_idx = 0; fn_idx < func->arg_count; fn_idx++) {
-		if (!func->split_args[fn_idx])
-			continue;
-		sql_idx = get_sql_ref(q, fn_idx);
-		appendStringInfo(buf, ", a%d", sql_idx + 1);
-	}
-	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
 
 	/* call enumerate function on all arrays() */
 	appendStringInfoString(buf, " from plproxy.enumerate");
 	pfx = "(";
-	for (fn_idx = 0; fn_idx < func->arg_count; fn_idx++) {
+	for (sql_idx = 0; sql_idx < q->arg_count; sql_idx++) {
+		fn_idx = q->arg_lookup[sql_idx];
 		if (!func->split_args[fn_idx])
 			continue;
-		sql_idx = get_sql_ref(q, fn_idx);
 		appendStringInfo(buf, "%s$%d", pfx, sql_idx + 1);
 		pfx = ", ";
 	}
-	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
 
 	/* describe enumerate output */
 	appendStringInfoString(buf, ") as (nr int4");
-	for (fn_idx = 0; fn_idx < func->arg_count; fn_idx++) {
+	for (sql_idx = 0; sql_idx < q->arg_count; sql_idx++) {
 		ProxyType *typ;
+		fn_idx = q->arg_lookup[sql_idx];
 		if (!func->split_args[fn_idx])
 			continue;
-		sql_idx = get_sql_ref(q, fn_idx);
 		typ = plproxy_find_type_info(func, func->arg_types[fn_idx]->elem_type, false);
 		appendStringInfo(buf, ", a%d %s", sql_idx + 1, typ->name);
 		plproxy_free_type(typ);
 	}
 	appendStringInfoString(buf, ")");
 	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
+
+	if (!gotarray) {
+		pfree(buf->data);
+		func->new_split = false;
+		return plproxy_query_finish(q);
+	}
 
 	/* replace old query */
 	pfree(q->sql->data);
