@@ -261,7 +261,7 @@ plproxy_standard_query(ProxyFunction *func, bool add_types)
 /*
  * Hack to calculate split hashes with one sql.
  *
- * select nr, myhash(a1), a1, a2 from plproxy.enumerate($1, $2) as (nr int4, a1 text, a2 text);
+ * select nr, hashfunc(a1) from (select generate_series(array_lower($1, 1), array_upper($1, 1)) as nr, unnest($1) as a1) dat
  */
 ProxyQuery *
 plproxy_split_query(ProxyFunction *func, QueryBuffer *q)
@@ -269,7 +269,7 @@ plproxy_split_query(ProxyFunction *func, QueryBuffer *q)
 	char *pfx;
 	struct ArgRef *ref;
 	int i, pos, fn_idx, sql_idx;
-	bool gotarray = false;
+	int split_idx = -1;
 	StringInfoData buf[1];
 
 	if (!q->track_refs)
@@ -292,40 +292,32 @@ plproxy_split_query(ProxyFunction *func, QueryBuffer *q)
 		if (!func->split_args[fn_idx]) {
 			appendBinaryStringInfo(buf, q->sql->data + pos, ref->end - pos);
 		} else {
+			/* replace $X with aX */
 			appendBinaryStringInfo(buf, q->sql->data + pos, ref->start - pos);
 			appendStringInfo(buf, "a%d", ref->sql_idx + 1);
-			gotarray = true;
+			if (split_idx < 0)
+				split_idx = ref->sql_idx;
 		}
 		pos = ref->end;
 	}
 	appendStringInfo(buf, "%s as hash", q->sql->data + pos);
 
-	/* call enumerate function on all arrays() */
-	appendStringInfoString(buf, " from plproxy.enumerate");
-	pfx = "(";
+	/* unnest arrays to be hashed */
+	appendStringInfoString(buf, " from (select generate_series(");
+	appendStringInfo(buf, "array_lower($%d, 1), array_upper($%d, 1)) as nr",
+					 split_idx + 1, split_idx + 1);
 	for (sql_idx = 0; sql_idx < q->arg_count; sql_idx++) {
 		fn_idx = q->arg_lookup[sql_idx];
 		if (!func->split_args[fn_idx])
 			continue;
-		appendStringInfo(buf, "%s$%d", pfx, sql_idx + 1);
-		pfx = ", ";
+		appendStringInfo(buf, ", unnest($%d) as a%d", sql_idx + 1, sql_idx + 1);
 	}
+	appendStringInfoString(buf, ") dat");
 
-	/* describe enumerate output */
-	appendStringInfoString(buf, ") as (nr int4");
-	for (sql_idx = 0; sql_idx < q->arg_count; sql_idx++) {
-		ProxyType *typ;
-		fn_idx = q->arg_lookup[sql_idx];
-		if (!func->split_args[fn_idx])
-			continue;
-		typ = plproxy_find_type_info(func, func->arg_types[fn_idx]->elem_type, false);
-		appendStringInfo(buf, ", a%d %s", sql_idx + 1, typ->name);
-		plproxy_free_type(typ);
-	}
-	appendStringInfoString(buf, ")");
 	//elog(WARNING, "split query(%d): %s", __LINE__, buf->data);
 
-	if (!gotarray) {
+	if (split_idx < 0) {
+		/* fall back to old way if no arrays in hash args */
 		pfree(buf->data);
 		func->new_split = false;
 		return plproxy_query_finish(q);
