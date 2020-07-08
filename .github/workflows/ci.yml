@@ -27,6 +27,8 @@ jobs:
 
       - name: "InstallDB"
         run: |
+          sudo -nH apt-get update
+
           # disable new cluster creation
           sudo -nH mkdir -p /etc/postgresql-common/createcluster.d
           echo "create_main_cluster = false" | sudo -nH tee /etc/postgresql-common/createcluster.d/no-main.conf
