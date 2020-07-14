@@ -152,5 +152,7 @@ jobs:
           flex --version || true
           bison --version || true
           initdb --version || true
-          make FLEX="c:/msys64/bin/flex" BISON="c:/msys64/bin/bison"
+          /c/msys64/bin/flex --version || true
+          /c/msys64/bin/bison --version || true
+          make FLEX="/c/msys64/bin/flex" BISON="/c/msys64/bin/bison"
 
