@@ -138,10 +138,18 @@ jobs:
       - name: "Checkout"
         uses: actions/checkout@v2
 
+      - name: "Show"
+        shell: cmd
+        run: |
+          dir "C:\Program Files\PostgreSQL\12"
+          dir "C:\Program Files\PostgreSQL\12\bin"
+
       - name: "Build"
         shell: bash
         run: |
           echo "PATH=$PATH"
+          ls 'C:\Program Files\PostgreSQL\12'
+          ls 'C:\Program Files\PostgreSQL\12\bin'
           flex --version || true
           bison --version || true
           initdb --version || true
