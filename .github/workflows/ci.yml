@@ -141,8 +141,8 @@ jobs:
       - name: "Show"
         shell: bash
         run: |
-          rm -rf c:/pg12
-          cp -rp c:/Program Files/PostgreSQL/12 c:/pg12
+          rm -rf "c:/pg12"
+          cp -rp "c:/Program Files/PostgreSQL/12" "c:/pg12"
           echo "::add-path::c:/pg12/bin"
 
       - name: "Build"
