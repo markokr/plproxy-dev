@@ -75,11 +75,12 @@ jobs:
           rm -rf data log /tmp/.s.PGSQL*
 
   macos:
-    name: "MacOS + PostgreSQL ${{matrix.PGVER}}"
+    name: "MacOS 10.15 + PostgreSQL ${{matrix.PGVER}}"
     runs-on: macos-10.15
     strategy:
       matrix:
         PGVER:
+          - 11
           - 12
     steps:
       - name: "Checkout"
@@ -87,18 +88,12 @@ jobs:
 
       - name: "InstallDB"
         run: |
-          flex --version || true
-          bison --version || true
-          initdb --version || true
           echo "::group::install"
-          brew install patchutils bison flex gnu-sed
+          brew install patchutils bison flex gnu-sed postgresql@${{matrix.PGVER}}
           echo "::endgroup::"
           echo "::add-path::/usr/local/opt/flex/bin"
           echo "::add-path::/usr/local/opt/bison/bin"
-          echo "::add-path::/usr/local/opt/postgresql/bin"
-          echo "PATH=$PATH"
-          ls /usr/local/opt
-          ls /usr/local/opt/postgresql
+          echo "::add-path::/usr/local/opt/postgresql@${{matrix.PGVER}}/bin"
 
       - name: "Build"
         run: |
@@ -126,32 +121,4 @@ jobs:
         run: |
           pg_ctl -D data stop
           rm -rf data log /tmp/.s.PGSQL*
-
-  windows:
-    name: "${{matrix.test.OSNAME}} + PostgreSQL ${{matrix.test.PGVER}}"
-    runs-on: windows-2019
-    strategy:
-      matrix:
-        test:
-          - {PGVER: 12, OS: "windows-2019", OSNAME: "Windows 2019"}
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v2
-
-      - name: "Copy"
-        shell: cmd
-        run: |
-          xcopy /i /q /y "c:\Program Files\PostgreSQL\12" "c:\pg12"
-          echo "::add-path::c:/pg12/bin"
-
-      - name: "Build"
-        shell: bash
-        run: |
-          echo "PATH=$PATH"
-
-          initdb --version || true
-          pg_config --version || true
-          c:/msys64/bin/flex --version || true
-          c:/msys64/bin/bison --version || true
-          make FLEX="/c/msys64/bin/flex" BISON="/c/msys64/bin/bison"
 
