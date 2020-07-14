@@ -157,7 +157,7 @@ jobs:
       - name: "InstallDB"
         shell: bash
         run: |
-          net start postgesql-x64-${{matrix.test.PGVER}}
+          net start postgresql-x64-${{matrix.test.PGVER}}
           flex --version || true
           bison --version || true
           initdb --version || true
