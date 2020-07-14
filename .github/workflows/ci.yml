@@ -139,10 +139,9 @@ jobs:
         uses: actions/checkout@v2
 
       - name: "Show"
-        shell: cmd
+        shell: bash
         run: |
-          dir "C:\Program Files\PostgreSQL\12"
-          dir "C:\Program Files\PostgreSQL\12\bin"
+          echo "::add-path::C:\Program Files\PostgreSQL\12\bin"
 
       - name: "Build"
         shell: bash
@@ -153,5 +152,5 @@ jobs:
           flex --version || true
           bison --version || true
           initdb --version || true
-          make
+          make FLEX="c:/msys64/bin/flex" BISON="c:/msys64/bin/bison"
 
