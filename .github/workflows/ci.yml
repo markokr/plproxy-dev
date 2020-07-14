@@ -138,10 +138,10 @@ jobs:
       - name: "Checkout"
         uses: actions/checkout@v2
 
-      - name: "Show"
-        shell: bash
+      - name: "Copy"
+        shell: cmd
         run: |
-          xcopy "c:/Program Files/PostgreSQL/12" "c:/pg12"
+          xcopy "c:\Program Files\PostgreSQL\12" "c:\pg12"
           echo "::add-path::c:/pg12/bin"
 
       - name: "Build"
