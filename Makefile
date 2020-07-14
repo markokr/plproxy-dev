@@ -132,3 +132,10 @@ citest:
 ack:
 	cp results/*.out test/expected/
 
+checkver:
+	@echo "Checking version numbers"
+	@grep -q "^default_version *= *'$(EXTVERSION)'" $(EXTENSION).control \
+		|| { echo "ERROR: $(EXTENSION).control has wrong version"; exit 1; }
+	@test -f "docs/notes/v$(EXTVERSION).md" \
+		|| { echo "ERROR: notes missing: docs/notes/v$(EXTVERSION).md"; exit 1; }
+
