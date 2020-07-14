@@ -141,18 +141,18 @@ jobs:
       - name: "Show"
         shell: bash
         run: |
-          echo "::add-path::C:\Program Files\PostgreSQL\12\bin"
+          rm -rf c:/pg12
+          cp -rp c:/Program Files/PostgreSQL/12 c:/pg12
+          echo "::add-path::c:/pg12/bin"
 
       - name: "Build"
         shell: bash
         run: |
           echo "PATH=$PATH"
-          ls 'C:\Program Files\PostgreSQL\12'
-          ls 'C:\Program Files\PostgreSQL\12\bin'
-          flex --version || true
-          bison --version || true
+
           initdb --version || true
-          /c/msys64/bin/flex --version || true
-          /c/msys64/bin/bison --version || true
+          pg_config --version || true
+          c:/msys64/bin/flex --version || true
+          c:/msys64/bin/bison --version || true
           make FLEX="/c/msys64/bin/flex" BISON="/c/msys64/bin/bison"
 
