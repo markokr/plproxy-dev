@@ -141,7 +141,7 @@ jobs:
       - name: "Copy"
         shell: cmd
         run: |
-          xcopy "c:\Program Files\PostgreSQL\12" "c:\pg12"
+          xcopy /i /q /y "c:\Program Files\PostgreSQL\12" "c:\pg12"
           echo "::add-path::c:/pg12/bin"
 
       - name: "Build"
