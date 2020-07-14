@@ -138,22 +138,6 @@ jobs:
       - name: "Checkout"
         uses: actions/checkout@v2
 
-      - name: "Setup MSYS"
-        shell: cmd
-        run: |
-          echo "temp add MSYS to PATH"
-          echo ::set-env name=OLDP::%PATH%
-          echo ::add-path::C:\msys64\usr\bin
-
-      - name: "Install patchutils"
-        shell: bash
-        run: |
-          pacman -S --noconfirm --needed patchutils
-          mkdir bin
-          install -m 755 /c/msys64/usr/bin/filterdiff.exe bin/
-          # reset PATH
-          echo "::add-path::${OLDP}"
-
       - name: "Build"
         shell: bash
         run: |
