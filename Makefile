@@ -1,7 +1,7 @@
 EXTENSION  = plproxy
 
 # sync with NEWS, META.json, plproxy.control
-DISTVERSION = 2.9
+DISTVERSION = 2.9.0
 EXTVERSION = 2.9.0
 UPGRADE_VERS = 2.3.0 2.4.0 2.5.0 2.6.0 2.7.0 2.8.0
 
@@ -136,6 +136,6 @@ checkver:
 	@echo "Checking version numbers"
 	@grep -q "^default_version *= *'$(EXTVERSION)'" $(EXTENSION).control \
 		|| { echo "ERROR: $(EXTENSION).control has wrong version"; exit 1; }
-	@test -f "docs/notes/v$(EXTVERSION).md" \
-		|| { echo "ERROR: notes missing: docs/notes/v$(EXTVERSION).md"; exit 1; }
+	@test -f "doc/notes/v$(EXTVERSION).md" \
+		|| { echo "ERROR: notes missing: doc/notes/v$(EXTVERSION).md"; exit 1; }
 
